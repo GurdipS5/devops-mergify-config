@@ -1,0 +1,315 @@
+# Team-based approval requirements based on tech stack and change scope
+pull_request_rules:
+  # Infrastructure Changes - Always require DevOps approval
+  - name: Infrastructure changes require DevOps approval
+    conditions:
+      - or:
+        - "label=tech:terraform"
+        - "label=tech:kubernetes" 
+        - "files~=^(infrastructure/|terraform/|k8s/|helm/)"
+        - "files~=\\.tf$"
+        - "files~=\\.tfvars$"
+    actions:
+      request_reviews:
+        teams:
+          - "devops-team"
+      comment:
+        message: |
+          🏗️ **Infrastructure changes detected** - DevOps review required
+          
+          **Required approvals:**
+          - [ ] DevOps team member approval
+          - [ ] Infrastructure checklist completion
+          
+  # Security-sensitive changes require security team
+  - name: Security-sensitive files require security review
+    conditions:
+      - or:
+        - "files~=^(auth/|security/|iam/|rbac/)"
+        - "files~=(secret|credential|key|cert|ssl|tls)"
+        - "label=security-review-required"
+        - and:
+          - "label=tech:terraform"
+          - "files~=(iam|security|policy)"
+    actions:
+      request_reviews:
+        teams:
+          - "security-team"
+        users:
+          - "security-lead"
+      comment:
+        message: |
+          🔒 **Security review required**
+          
+          **Required approvals:**
+          - [ ] Security team approval
+          - [ ] Security checklist completion
+
+  # Production deployment approvals
+  - name: Production changes require senior approval
+    conditions:
+      - "base=main"
+      - or:
+        - "label=tech:terraform"
+        - "label=tech:kubernetes"
+        - "files~=(prod|production)"
+    actions:
+      request_reviews:
+        teams:
+          - "devops-leads"
+          - "platform-architects"
+      comment:
+        message: |
+          🚨 **PRODUCTION DEPLOYMENT**
+          
+          **Required approvals:**
+          - [ ] DevOps Lead approval
+          - [ ] Platform Architect approval  
+          - [ ] Change management ticket linked
+          - [ ] Rollback plan documented
+
+  # Application changes by technology
+  - name: .NET changes require senior .NET developer
+    conditions:
+      - "label=tech:dotnet"
+      - or:
+        - "files~=(Controller|Service|Repository)"
+        - "#files>=10"
+    actions:
+      request_reviews:
+        teams:
+          - "dotnet-guild"
+        users:
+          - "senior-dotnet-dev"
+
+  - name: Node.js changes require frontend team review
+    conditions:
+      - "label=tech:nodejs"
+      - "files~=^(src/|components/|pages/)"
+    actions:
+      request_reviews:
+        teams:
+          - "frontend-team"
+
+  # Database changes always require DBA review
+  - name: Database changes require DBA approval
+    conditions:
+      - or:
+        - "files~=migration"
+        - "files~=\\.sql$"
+        - "files~=schema"
+        - "label=database-change"
+    actions:
+      request_reviews:
+        users:
+          - "database-administrator"
+          - "senior-dba"
+      comment:
+        message: |
+          🗄️ **Database changes detected**
+          
+          **Required approvals:**
+          - [ ] DBA review and approval
+          - [ ] Migration tested in staging
+          - [ ] Rollback script prepared
+
+  # Large changes require architectural review
+  - name: Large changes require architecture review
+    conditions:
+      - "#files>=20"
+      - or:
+        - "label=tech:dotnet"
+        - "label=tech:nodejs"
+        - "label=tech:python"
+    actions:
+      request_reviews:
+        teams:
+          - "architecture-council"
+      comment:
+        message: |
+          🏛️ **Large change detected ({{ files | length }} files)**
+          
+          **Architectural review required:**
+          - [ ] Architecture council approval
+          - [ ] Design document linked
+          - [ ] Impact assessment completed
+
+  # Emergency changes - reduced requirements but with tracking
+  - name: Emergency changes fast-track
+    conditions:
+      - "label=emergency"
+      - "approved-reviews-by=@devops-leads"
+    actions:
+      merge:
+        method: squash
+      comment:
+        message: |
+          🚨 **EMERGENCY MERGE APPROVED**
+          - Approved by: {{ approved_reviews_by | join(", ") }}
+          - Timestamp: {{ now }}
+          - Post-merge review required within 24 hours
+
+  # Multi-technology changes require cross-team coordination
+  - name: Multi-tech changes require coordinated review
+    conditions:
+      - "#labels~=^tech: >= 3"
+    actions:
+      request_reviews:
+        teams:
+          - "devops-team"
+          - "architecture-council"
+      comment:
+        message: |
+          🔄 **Multi-technology change detected**
+          
+          **Technologies involved:** {{ labels | select(startswith("tech:")) | join(", ") }}
+          
+          **Required coordination:**
+          - [ ] DevOps team approval
+          - [ ] Architecture council review
+          - [ ] Cross-team impact assessment
+
+  # External dependency changes
+  - name: External dependency updates require security scan
+    conditions:
+      - or:
+        - "files~=package\\.json$"
+        - "files~=requirements\\.txt$"
+        - "files~=\\.csproj$"
+        - "files~=go\\.mod$"
+      - "body~=(?i)(dependency|package|library|update|upgrade)"
+    actions:
+      request_reviews:
+        teams:
+          - "security-team"
+      comment:
+        message: |
+          📦 **Dependency changes detected**
+          
+          **Security review required:**
+          - [ ] Vulnerability scan completed
+          - [ ] License compatibility checked
+          - [ ] Breaking changes assessed
+
+  # Documentation changes - lighter review process
+  - name: Documentation changes simplified review
+    conditions:
+      - "files~=\\.(md|txt|rst)$"
+      - "#files<=5"
+      - "-files~=\\.(js|ts|cs|py|tf|yml|yaml)$"
+    actions:
+      request_reviews:
+        teams:
+          - "technical-writers"
+      comment:
+        message: |
+          📚 **Documentation update** - Simplified review process
+
+  # Critical system changes - escalated approval
+  - name: Critical system changes - escalated approval
+    conditions:
+      - or:
+        - and:
+          - "label=tech:terraform"
+          - "files~=(vpc|network|security-group|iam)"
+        - and:
+          - "label=tech:kubernetes"
+          - "files~=(rbac|network-policy|security-context)"
+        - and:
+          - "label=tech:dotnet"
+          - "files~=(authentication|authorization|security)"
+    actions:
+      request_reviews:
+        teams:
+          - "devops-leads"
+          - "security-leads" 
+          - "platform-architects"
+      comment:
+        message: |
+          ⚠️ **CRITICAL SYSTEM CHANGE - ESCALATED APPROVAL REQUIRED**
+          
+          **Approval chain:**
+          1. [ ] Technical review by relevant team
+          2. [ ] Security review and approval
+          3. [ ] DevOps leadership approval
+          4. [ ] Platform architecture approval
+          
+          **Additional requirements:**
+          - [ ] Risk assessment documented
+          - [ ] Blast radius analysis completed
+          - [ ] Detailed rollback procedure
+
+  # Time-based approval requirements (business hours vs after hours)
+  - name: After-hours changes require additional approval
+    conditions:
+      - "label=after-hours-deployment"
+      - "base=main"
+    actions:
+      request_reviews:
+        teams:
+          - "on-call-engineers"
+          - "devops-leads"
+      comment:
+        message: |
+          🌙 **After-hours deployment detected**
+          
+          **Additional requirements:**
+          - [ ] On-call engineer approval
+          - [ ] DevOps lead acknowledgment
+          - [ ] Monitoring alerts configured
+          - [ ] Incident response plan ready
+
+  # Compliance-driven approvals (SOX, GDPR, etc.)
+  - name: Compliance-sensitive changes
+    conditions:
+      - or:
+        - "files~=(audit|compliance|gdpr|sox|pci)"
+        - "label=compliance-review"
+        - and:
+          - "files~=(financial|payment|billing)"
+          - "label=tech:dotnet"
+    actions:
+      request_reviews:
+        teams:
+          - "compliance-team"
+          - "legal-team"
+      comment:
+        message: |
+          ⚖️ **Compliance review required**
+          
+          **Regulatory approvals needed:**
+          - [ ] Compliance team review
+          - [ ] Legal team approval (if required)
+          - [ ] Audit trail documentation
+          - [ ] Data privacy impact assessment
+
+  # Approval bypass for automated dependency updates
+  - name: Automated dependency updates - fast track
+    conditions:
+      - "author=dependabot[bot]"
+      - "status-success=security-scan"
+      - "status-success=automated-tests"
+      - "#files<=3"
+    actions:
+      merge:
+        method: squash
+      comment:
+        message: |
+          🤖 **Automated dependency update - Auto-approved**
+          - Security scan: ✅ Passed
+          - Automated tests: ✅ Passed
+          - Files changed: {{ files | length }}
+
+  # Repository-specific approval overrides
+  - name: Demo/sandbox repositories - relaxed approval
+    conditions:
+      - "repository~=(demo|sandbox|prototype|poc)"
+      - "base!=main"
+    actions:
+      request_reviews:
+        random_count: 1
+        teams:
+          - "development-team"
+      comment:
+        message: |
+          🏖️ **Sandbox environment - Relaxed approval process**
