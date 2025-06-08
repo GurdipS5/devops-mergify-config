@@ -1,0 +1,27 @@
+
+  # =============================================================================
+  # TEMPORARY BYPASS FOR SYSTEM MAINTENANCE
+  # =============================================================================
+  
+  - name: Maintenance window bypass - scheduled maintenance
+    conditions:
+      - "label=maintenance-window"
+      - "approved-reviews-by=@maintenance-coordinators"
+      - "body~=(?i)(maintenance|scheduled|window)"
+    actions:
+      merge:
+        method: squash
+      comment:
+        message: |
+          🔧 **Maintenance Window Override**
+          
+          **Scheduled Maintenance:**
+          - Coordinator: {{ approved_reviews_by | select(match("@maintenance-coordinators")) | join(", ") }}
+          - Maintenance window: Active
+          - Standard procedures temporarily suspended
+          
+          **MAINTENANCE PROTOCOL:**
+          - [ ] Maintenance ticket reference required
+          - [ ] Service impact documented
+          - [ ] Rollback procedures ready
+          - [ ] Normal operations resume post-maintenance
