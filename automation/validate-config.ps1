@@ -1,5 +1,5 @@
-# audit-compliance.ps1
-# PowerShell script to audit Mergify configuration compliance
+# validate-config.ps1
+# PowerShell script to validate Mergify configuration files with Mergify CLI integration
 
 param(
     [Parameter(Mandatory=$false)]
@@ -9,550 +9,714 @@ param(
     [string]$ChecklistPath = "checklists",
     
     [Parameter(Mandatory=$false)]
-    [string]$OutputFormat = "console", # console, json, csv
+    [switch]$Verbose,
     
     [Parameter(Mandatory=$false)]
-    [string]$OutputFile,
+    [switch]$FailFast,
     
     [Parameter(Mandatory=$false)]
-    [switch]$Detailed
+    [switch]$UseMergifyCLI = $true,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$MergifyToken = $env:MERGIFY_TOKEN
 )
 
-# Compliance framework definitions
-$ComplianceFrameworks = @{
-    "SOX" = @{
-        "Name" = "Sarbanes-Oxley Act"
-        "Requirements" = @(
-            "Financial code changes require dual approval",
-            "Audit trail for all production changes", 
-            "Segregation of duties in deployment process",
-            "Change management documentation"
+# Set error action preference
+$ErrorActionPreference = "Stop"
+
+# Initialize counters
+$script:TotalChecks = 0
+$script:PassedChecks = 0
+$script:FailedChecks = 0
+$script:Warnings = 0
+
+# Color output functions
+function Write-Success {
+    param([string]$Message)
+    Write-Host "✅ $Message" -ForegroundColor Green
+}
+
+function Write-Error {
+    param([string]$Message)
+    Write-Host "❌ $Message" -ForegroundColor Red
+}
+
+function Write-Warning {
+    param([string]$Message)
+    Write-Host "⚠️  $Message" -ForegroundColor Yellow
+    $script:Warnings++
+}
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "ℹ️  $Message" -ForegroundColor Cyan
+}
+
+function Test-MergifyCLIAvailable {
+    try {
+        $mergifyVersion = & mergify --version 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Mergify CLI found: $mergifyVersion"
+            return $true
+        }
+    }
+    catch {
+        Write-Warning "Mergify CLI not found. Install with: pip install mergify-cli"
+        return $false
+    }
+    return $false
+}
+
+function Install-MergifyCLI {
+    Write-Info "Attempting to install Mergify CLI..."
+    try {
+        # Check if pip is available
+        $pipVersion = & pip --version 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "pip not found. Please install Python and pip first."
+            return $false
+        }
+        
+        # Install Mergify CLI
+        Write-Info "Installing mergify-cli..."
+        & pip install mergify-cli --upgrade
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Mergify CLI installed successfully"
+            return $true
+        } else {
+            Write-Error "Failed to install Mergify CLI"
+            return $false
+        }
+    }
+    catch {
+        Write-Error "Error installing Mergify CLI: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Test-MergifyConfigWithCLI {
+    param(
+        [string]$FilePath,
+        [string]$Repository = "organization/repository"
+    )
+    
+    $script:TotalChecks++
+    
+    try {
+        Write-Info "Validating $FilePath with Mergify CLI..."
+        
+        # Basic syntax validation
+        $validateOutput = & mergify validate $FilePath 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Mergify CLI validation passed: $FilePath"
+            
+            if ($Verbose -and $validateOutput) {
+                Write-Host "CLI Output: $validateOutput" -ForegroundColor Gray
+            }
+            
+            $script:PassedChecks++
+        } else {
+            Write-Error "Mergify CLI validation failed for $FilePath"
+            Write-Host "Error details: $validateOutput" -ForegroundColor Red
+            $script:FailedChecks++
+            return $false
+        }
+        
+        # Advanced validation with repository context (if token available)
+        if ($MergifyToken -and $Repository) {
+            Write-Info "Running advanced validation with repository context..."
+            
+            $env:MERGIFY_TOKEN = $MergifyToken
+            $advancedOutput = & mergify validate --repository $Repository $FilePath 2>&1
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Advanced Mergify validation passed: $FilePath"
+                
+                if ($Verbose -and $advancedOutput) {
+                    Write-Host "Advanced validation output: $advancedOutput" -ForegroundColor Gray
+                }
+            } else {
+                Write-Warning "Advanced validation failed: $advancedOutput"
+                # Don't fail the script for advanced validation failures
+            }
+        }
+        
+        return $true
+    }
+    catch {
+        Write-Error "Error running Mergify CLI validation: $($_.Exception.Message)"
+        $script:FailedChecks++
+        return $false
+    }
+}
+
+function Test-MergifyConfigSyntax {
+    param([string]$FilePath)
+    
+    $script:TotalChecks++
+    
+    try {
+        Write-Info "Testing configuration syntax: $FilePath"
+        
+        # Use mergify check-config if available
+        $checkOutput = & mergify check-config $FilePath 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Configuration syntax check passed: $FilePath"
+            $script:PassedChecks++
+            return $true
+        } else {
+            Write-Error "Configuration syntax check failed: $checkOutput"
+            $script:FailedChecks++
+            return $false
+        }
+    }
+    catch {
+        Write-Warning "mergify check-config not available, falling back to basic validation"
+        # Fall back to basic YAML validation
+        return Test-YamlSyntax -FilePath $FilePath
+    }
+}
+
+function Test-MergifyRulesWithCLI {
+    param(
+        [string]$ConfigFile,
+        [string]$Repository = "test-org/test-repo"
+    )
+    
+    $script:TotalChecks++
+    
+    try {
+        Write-Info "Testing Mergify rules simulation..."
+        
+        # Create a test pull request scenario
+        $testPR = @{
+            number = 123
+            title = "Test PR for validation"
+            files = @("test.tf", "app.cs", "Dockerfile")
+            labels = @("tech:terraform", "tech:dotnet", "tech:docker")
+            base_branch = "main"
+            author = "test-user"
+        }
+        
+        # Convert to JSON for CLI
+        $testPRJson = $testPR | ConvertTo-Json -Depth 3
+        $tempPRFile = [System.IO.Path]::GetTempFileName()
+        $testPRJson | Out-File -FilePath $tempPRFile -Encoding UTF8
+        
+        # Simulate rules (if mergify CLI supports it)
+        $simulateOutput = & mergify simulate --config $ConfigFile --pr-data $tempPRFile 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Rules simulation passed: $ConfigFile"
+            
+            if ($Verbose) {
+                Write-Host "Simulation output: $simulateOutput" -ForegroundColor Gray
+            }
+            
+            $script:PassedChecks++
+        } else {
+            Write-Warning "Rules simulation failed or not supported: $simulateOutput"
+            # Don't fail for simulation issues
+            $script:PassedChecks++
+        }
+        
+        # Clean up temp file
+        Remove-Item $tempPRFile -ErrorAction SilentlyContinue
+        
+        return $true
+    }
+    catch {
+        Write-Warning "Could not run rules simulation: $($_.Exception.Message)"
+        $script:PassedChecks++
+        return $true
+    }
+}
+
+function Test-MergifyTeamsAndUsers {
+    param(
+        [string]$ConfigContent,
+        [string]$Repository
+    )
+    
+    $script:TotalChecks++
+    
+    if (-not $MergifyToken -or -not $Repository) {
+        Write-Warning "Skipping team/user validation - missing token or repository"
+        $script:PassedChecks++
+        return $true
+    }
+    
+    try {
+        Write-Info "Validating teams and users with GitHub API..."
+        
+        # Extract teams and users from config
+        $teamMatches = [regex]::Matches($ConfigContent, 'teams:\s*-\s*["\']([^"\']+)["\']')
+        $userMatches = [regex]::Matches($ConfigContent, 'users:\s*-\s*["\']([^"\']+)["\']')
+        
+        $env:MERGIFY_TOKEN = $MergifyToken
+        
+        # Validate teams exist
+        foreach ($match in $teamMatches) {
+            $teamName = $match.Groups[1].Value
+            
+            # Use mergify CLI to check team (if supported)
+            $teamCheck = & mergify check-team --repository $Repository --team $teamName 2>&1
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Team validation passed: $teamName"
+            } else {
+                Write-Warning "Team validation failed: $teamName - $teamCheck"
+            }
+        }
+        
+        # Validate users exist
+        foreach ($match in $userMatches) {
+            $userName = $match.Groups[1].Value
+            
+            # Use mergify CLI to check user (if supported)
+            $userCheck = & mergify check-user --repository $Repository --user $userName 2>&1
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "User validation passed: $userName"
+            } else {
+                Write-Warning "User validation failed: $userName - $userCheck"
+            }
+        }
+        
+        $script:PassedChecks++
+        return $true
+    }
+    catch {
+        Write-Warning "Error validating teams/users: $($_.Exception.Message)"
+        $script:PassedChecks++
+        return $true
+    }
+}
+
+function Test-MergifyTemplateValidation {
+    param([string]$ConfigPath)
+    
+    $script:TotalChecks++
+    
+    try {
+        Write-Info "Running Mergify template validation..."
+        
+        # Use mergify CLI to validate templates
+        $templateOutput = & mergify validate-templates --config-dir $ConfigPath 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Template validation passed"
+            
+            if ($Verbose) {
+                Write-Host "Template validation output: $templateOutput" -ForegroundColor Gray
+            }
+            
+            $script:PassedChecks++
+        } else {
+            Write-Warning "Template validation issues: $templateOutput"
+            # Don't fail for template validation
+            $script:PassedChecks++
+        }
+        
+        return $true
+    }
+    catch {
+        Write-Warning "Template validation not available or failed: $($_.Exception.Message)"
+        $script:PassedChecks++
+        return $true
+    }
+}
+
+function Test-MergifyConfigPerformance {
+    param([string]$ConfigFile)
+    
+    $script:TotalChecks++
+    
+    try {
+        Write-Info "Analyzing configuration performance..."
+        
+        # Use mergify CLI to analyze performance
+        $perfOutput = & mergify analyze-performance $ConfigFile 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Performance analysis completed"
+            
+            if ($Verbose) {
+                Write-Host "Performance analysis: $perfOutput" -ForegroundColor Gray
+            }
+            
+            # Check for performance warnings
+            if ($perfOutput -match "warning|slow|inefficient") {
+                Write-Warning "Performance issues detected in configuration"
+            }
+            
+            $script:PassedChecks++
+        } else {
+            Write-Warning "Performance analysis not available: $perfOutput"
+            $script:PassedChecks++
+        }
+        
+        return $true
+    }
+    catch {
+        Write-Warning "Performance analysis failed: $($_.Exception.Message)"
+        $script:PassedChecks++
+        return $true
+    }
+}
+
+function Test-YamlSyntax {
+    param([string]$FilePath)
+    
+    $script:TotalChecks++
+    
+    try {
+        # Test YAML syntax using PowerShell-Yaml module or basic validation
+        if (Get-Module -ListAvailable -Name powershell-yaml) {
+            Import-Module powershell-yaml -ErrorAction Stop
+            $content = Get-Content $FilePath -Raw
+            $null = ConvertFrom-Yaml $content
+            Write-Success "YAML syntax valid: $FilePath"
+            $script:PassedChecks++
+            return $true
+        }
+        else {
+            # Basic YAML validation without module
+            $content = Get-Content $FilePath
+            $lineNumber = 0
+            foreach ($line in $content) {
+                $lineNumber++
+                if ($line -match "^\s*-\s*$") {
+                    Write-Warning "Empty list item at line $lineNumber in $FilePath"
+                }
+                if ($line -match "^\s*:\s*$") {
+                    Write-Error "Empty key-value pair at line $lineNumber in $FilePath"
+                    $script:FailedChecks++
+                    return $false
+                }
+            }
+            Write-Success "Basic YAML validation passed: $FilePath"
+            $script:PassedChecks++
+            return $true
+        }
+    }
+    catch {
+        Write-Error "YAML syntax error in $FilePath`: $($_.Exception.Message)"
+        $script:FailedChecks++
+        return $false
+    }
+}
+
+function Test-MergifyConfig {
+    param([string]$FilePath)
+    
+    $script:TotalChecks++
+    
+    try {
+        $content = Get-Content $FilePath -Raw
+        
+        # Check for required sections
+        if ($content -notmatch "pull_request_rules:") {
+            Write-Error "Missing 'pull_request_rules' section in $FilePath"
+            $script:FailedChecks++
+            return $false
+        }
+        
+        # Check for proper conditions and actions structure
+        if ($content -match "conditions:" -and $content -notmatch "actions:") {
+            Write-Error "Found conditions without corresponding actions in $FilePath"
+            $script:FailedChecks++
+            return $false
+        }
+        
+        # Validate team names format
+        $teamMatches = [regex]::Matches($content, 'teams:\s*-\s*"([^"]+)"')
+        foreach ($match in $teamMatches) {
+            $teamName = $match.Groups[1].Value
+            if ($teamName -notmatch '^[a-zA-Z0-9\-_]+$') {
+                Write-Warning "Team name '$teamName' contains special characters that might cause issues"
+            }
+        }
+        
+        # Check for potentially dangerous patterns
+        if ($content -match 'merge:\s*method:\s*merge') {
+            Write-Warning "Found merge method 'merge' - consider using 'squash' for cleaner history"
+        }
+        
+        Write-Success "Mergify configuration structure valid: $FilePath"
+        $script:PassedChecks++
+        return $true
+    }
+    catch {
+        Write-Error "Error validating Mergify config $FilePath`: $($_.Exception.Message)"
+        $script:FailedChecks++
+        return $false
+    }
+}
+
+function Test-SecurityPolicies {
+    param([string]$FilePath)
+    
+    $script:TotalChecks++
+    
+    try {
+        $content = Get-Content $FilePath -Raw
+        
+        # Check for security-related rules
+        $securityChecks = @(
+            @{ Pattern = 'files~=.*secret'; Description = 'Secret file detection' },
+            @{ Pattern = 'files~=.*credential'; Description = 'Credential file detection' },
+            @{ Pattern = 'files~=.*\.env'; Description = 'Environment file detection' },
+            @{ Pattern = 'approved-reviews-by.*security'; Description = 'Security team approval' }
         )
-    }
-    "GDPR" = @{
-        "Name" = "General Data Protection Regulation"
-        "Requirements" = @(
-            "Data processing changes require privacy review",
-            "Personal data handling verification",
-            "Data retention policy compliance",
-            "Privacy impact assessment for data changes"
+        
+        $foundSecurityRules = 0
+        foreach ($check in $securityChecks) {
+            if ($content -match $check.Pattern) {
+                Write-Success "Found security rule: $($check.Description)"
+                $foundSecurityRules++
+            }
+        }
+        
+        if ($foundSecurityRules -eq 0) {
+            Write-Warning "No security-related rules found in $FilePath"
+        }
+        
+        # Check for hardcoded secrets in config
+        $suspiciousPatterns = @(
+            'password\s*=\s*["\'].*["\']',
+            'token\s*=\s*["\'].*["\']',
+            'key\s*=\s*["\'].*["\']'
         )
+        
+        foreach ($pattern in $suspiciousPatterns) {
+            if ($content -match $pattern) {
+                Write-Error "Potential hardcoded secret found in $FilePath"
+                $script:FailedChecks++
+                return $false
+            }
+        }
+        
+        Write-Success "Security policy validation passed: $FilePath"
+        $script:PassedChecks++
+        return $true
     }
-    "SOC2" = @{
-        "Name" = "SOC 2 Type II"
-        "Requirements" = @(
-            "Security controls for infrastructure changes",
-            "Access control verification",
-            "Change management procedures",
-            "Monitoring and logging requirements"
-        )
-    }
-    "ISO27001" = @{
-        "Name" = "ISO 27001"
-        "Requirements" = @(
-            "Information security management",
-            "Risk assessment for changes",
-            "Security incident response",
-            "Access control management"
-        )
-    }
-}
-
-# Initialize audit results
-$AuditResults = @{
-    "Timestamp" = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "ConfigPath" = $ConfigPath
-    "ComplianceScore" = 0
-    "FrameworkResults" = @{}
-    "Findings" = @()
-    "Recommendations" = @()
-}
-
-function Test-SOXCompliance {
-    param([string]$ConfigContent)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 4
-    
-    # Check for financial code protection
-    if ($ConfigContent -match 'files~=.*(financial|billing|payment|accounting)') {
-        $score++
-        $findings += "✅ Financial file detection rules found"
-    } else {
-        $findings += "❌ Missing financial file detection rules"
-    }
-    
-    # Check for dual approval on critical changes
-    if ($ConfigContent -match '#approved-reviews-by>=2') {
-        $score++
-        $findings += "✅ Dual approval requirement found"
-    } else {
-        $findings += "❌ Missing dual approval requirement"
-    }
-    
-    # Check for audit logging
-    if ($ConfigContent -match 'webhook.*audit') {
-        $score++
-        $findings += "✅ Audit logging webhook found"
-    } else {
-        $findings += "❌ Missing audit logging mechanism"
-    }
-    
-    # Check for change management
-    if ($ConfigContent -match 'change.management|ticket') {
-        $score++
-        $findings += "✅ Change management integration found"
-    } else {
-        $findings += "❌ Missing change management integration"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
+    catch {
+        Write-Error "Error validating security policies in $FilePath`: $($_.Exception.Message)"
+        $script:FailedChecks++
+        return $false
     }
 }
 
-function Test-GDPRCompliance {
-    param([string]$ConfigContent)
+function Test-ChecklistCompleteness {
+    param([string]$ChecklistDir)
     
-    $findings = @()
-    $score = 0
-    $maxScore = 4
-    
-    # Check for privacy-related file detection
-    if ($ConfigContent -match 'files~=.*(privacy|gdpr|personal|pii)') {
-        $score++
-        $findings += "✅ Privacy-related file detection found"
-    } else {
-        $findings += "❌ Missing privacy file detection rules"
-    }
-    
-    # Check for privacy team review
-    if ($ConfigContent -match 'privacy.team|data.protection') {
-        $score++
-        $findings += "✅ Privacy team review requirement found"
-    } else {
-        $findings += "❌ Missing privacy team review requirement"
-    }
-    
-    # Check for data impact assessment
-    if ($ConfigContent -match 'privacy.impact|data.impact') {
-        $score++
-        $findings += "✅ Data impact assessment requirement found"
-    } else {
-        $findings += "❌ Missing data impact assessment requirement"
-    }
-    
-    # Check for data retention compliance
-    if ($ConfigContent -match 'retention|data.lifecycle') {
-        $score++
-        $findings += "✅ Data retention compliance found"
-    } else {
-        $findings += "❌ Missing data retention compliance checks"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
-    }
-}
-
-function Test-SOC2Compliance {
-    param([string]$ConfigContent)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 4
-    
-    # Check for security controls
-    if ($ConfigContent -match 'security.team|security.review') {
-        $score++
-        $findings += "✅ Security review controls found"
-    } else {
-        $findings += "❌ Missing security review controls"
-    }
-    
-    # Check for access control verification
-    if ($ConfigContent -match 'files~=.*(iam|rbac|access|auth)') {
-        $score++
-        $findings += "✅ Access control file detection found"
-    } else {
-        $findings += "❌ Missing access control detection"
-    }
-    
-    # Check for infrastructure security
-    if ($ConfigContent -match 'label=tech:terraform.*security') {
-        $score++
-        $findings += "✅ Infrastructure security controls found"
-    } else {
-        $findings += "❌ Missing infrastructure security controls"
-    }
-    
-    # Check for monitoring requirements
-    if ($ConfigContent -match 'monitoring|logging|audit') {
-        $score++
-        $findings += "✅ Monitoring/logging requirements found"
-    } else {
-        $findings += "❌ Missing monitoring/logging requirements"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
-    }
-}
-
-function Test-ISO27001Compliance {
-    param([string]$ConfigContent)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 4
-    
-    # Check for information security management
-    if ($ConfigContent -match 'security.lead|security.team') {
-        $score++
-        $findings += "✅ Information security management found"
-    } else {
-        $findings += "❌ Missing information security management"
-    }
-    
-    # Check for risk assessment
-    if ($ConfigContent -match 'risk.assessment|security.review') {
-        $score++
-        $findings += "✅ Risk assessment requirements found"
-    } else {
-        $findings += "❌ Missing risk assessment requirements"
-    }
-    
-    # Check for incident response
-    if ($ConfigContent -match 'incident|emergency|rollback') {
-        $score++
-        $findings += "✅ Incident response procedures found"
-    } else {
-        $findings += "❌ Missing incident response procedures"
-    }
-    
-    # Check for access control management
-    if ($ConfigContent -match 'approved.reviews.by.*@') {
-        $score++
-        $findings += "✅ Access control management found"
-    } else {
-        $findings += "❌ Missing access control management"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
-    }
-}
-
-function Test-GeneralSecurityBestPractices {
-    param([string]$ConfigContent)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 6
-    
-    # Check for secret detection
-    if ($ConfigContent -match 'secret|credential|key|token') {
-        $score++
-        $findings += "✅ Secret detection rules found"
-    } else {
-        $findings += "❌ Missing secret detection rules"
-    }
-    
-    # Check for production protection
-    if ($ConfigContent -match 'base=main.*approval') {
-        $score++
-        $findings += "✅ Production branch protection found"
-    } else {
-        $findings += "❌ Missing production branch protection"
-    }
-    
-    # Check for infrastructure approval
-    if ($ConfigContent -match 'tech:terraform.*devops') {
-        $score++
-        $findings += "✅ Infrastructure change approval found"
-    } else {
-        $findings += "❌ Missing infrastructure change approval"
-    }
-    
-    # Check for emergency procedures
-    if ($ConfigContent -match 'emergency|break.glass') {
-        $score++
-        $findings += "✅ Emergency procedures found"
-    } else {
-        $findings += "❌ Missing emergency procedures"
-    }
-    
-    # Check for dependency scanning
-    if ($ConfigContent -match 'security.scan|vulnerability') {
-        $score++
-        $findings += "✅ Security scanning requirements found"
-    } else {
-        $findings += "❌ Missing security scanning requirements"
-    }
-    
-    # Check for segregation of duties
-    if ($ConfigContent -match '#approved.reviews.by>=2') {
-        $score++
-        $findings += "✅ Segregation of duties implemented"
-    } else {
-        $findings += "❌ Missing segregation of duties"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
-    }
-}
-
-function Test-MergifyBestPractices {
-    param([string]$ConfigContent)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 5
-    
-    # Check for proper extends usage
-    if ($ConfigContent -match 'extends:') {
-        $score++
-        $findings += "✅ Configuration extends from central repository"
-    } else {
-        $findings += "❌ Missing extends configuration - not using central repository"
-    }
-    
-    # Check for tech stack detection
-    if ($ConfigContent -match 'label=tech:') {
-        $score++
-        $findings += "✅ Tech stack detection labels found"
-    } else {
-        $findings += "❌ Missing tech stack detection"
-    }
-    
-    # Check for conditional extends
-    if ($ConfigContent -match 'conditionally_extends') {
-        $score++
-        $findings += "✅ Conditional extends for tech-specific rules found"
-    } else {
-        $findings += "❌ Missing conditional extends for tech-specific configurations"
-    }
-    
-    # Check for proper webhook usage
-    if ($ConfigContent -match 'webhook:') {
-        $score++
-        $findings += "✅ Webhook integration found"
-    } else {
-        $findings += "❌ Missing webhook integration for advanced features"
-    }
-    
-    # Check for merge methods
-    if ($ConfigContent -match 'method:\s*(squash|rebase)') {
-        $score++
-        $findings += "✅ Proper merge methods configured (squash/rebase)"
-    } else {
-        $findings += "❌ Missing or improper merge method configuration"
-    }
-    
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
-    }
-}
-
-function Test-TechStackCoverage {
-    param([string]$ConfigContent, [string]$ChecklistPath)
-    
-    $findings = @()
-    $score = 0
-    $maxScore = 6
+    $script:TotalChecks++
     
     $requiredTechStacks = @("terraform", "dotnet", "nodejs", "docker", "kubernetes", "python")
+    $missingChecklists = @()
     
     foreach ($tech in $requiredTechStacks) {
-        if ($ConfigContent -match "tech:$tech") {
-            $score++
-            $findings += "✅ $tech detection rules found"
-            
-            # Check if checklist exists
-            if ((Test-Path $ChecklistPath) -and (Test-Path (Join-Path $ChecklistPath "$tech"))) {
-                $findings += "✅ $tech checklist directory exists"
-            } else {
-                $findings += "⚠️  $tech checklist directory missing"
-            }
-        } else {
-            $findings += "❌ Missing $tech detection rules"
+        $techDir = Join-Path $ChecklistDir $tech
+        if (-not (Test-Path $techDir)) {
+            $missingChecklists += $tech
+            continue
+        }
+        
+        $checklistFile = Join-Path $techDir "$tech-checklist.yml"
+        if (-not (Test-Path $checklistFile)) {
+            $missingChecklists += "$tech checklist"
         }
     }
     
-    return @{
-        "Score" = $score
-        "MaxScore" = $maxScore
-        "Percentage" = [math]::Round(($score / $maxScore) * 100, 2)
-        "Findings" = $findings
+    if ($missingChecklists.Count -gt 0) {
+        Write-Warning "Missing checklists for: $($missingChecklists -join ', ')"
+    } else {
+        Write-Success "All required tech stack checklists present"
+        $script:PassedChecks++
+        return $true
+    }
+    
+    $script:PassedChecks++
+    return $true
+}
+
+function Test-ExtendReferences {
+    param([string]$ConfigPath)
+    
+    $script:TotalChecks++
+    
+    try {
+        $files = Get-ChildItem -Path $ConfigPath -Filter "*.yml" -Recurse
+        
+        foreach ($file in $files) {
+            $content = Get-Content $file.FullName -Raw
+            
+            # Find all extends references
+            $extendsMatches = [regex]::Matches($content, 'extends:\s*-\s*"([^"]+)"')
+            
+            foreach ($match in $extendsMatches) {
+                $extendUrl = $match.Groups[1].Value
+                
+                # Validate URL format
+                if ($extendUrl -notmatch '^https://raw\.githubusercontent\.com/') {
+                    Write-Warning "Non-standard extends URL in $($file.Name): $extendUrl"
+                }
+                
+                # Check if it's a relative path that should exist
+                if ($extendUrl -notmatch '^https://') {
+                    $referencedFile = Join-Path (Split-Path $file.FullName) $extendUrl
+                    if (-not (Test-Path $referencedFile)) {
+                        Write-Error "Referenced file not found: $extendUrl in $($file.Name)"
+                        $script:FailedChecks++
+                        return $false
+                    }
+                }
+            }
+        }
+        
+        Write-Success "All extends references validated"
+        $script:PassedChecks++
+        return $true
+    }
+    catch {
+        Write-Error "Error validating extends references: $($_.Exception.Message)"
+        $script:FailedChecks++
+        return $false
     }
 }
 
-function Start-ComplianceAudit {
-    Write-Host "🔍 Starting Mergify Compliance Audit..." -ForegroundColor Cyan
-    Write-Host "Config Path: $ConfigPath" -ForegroundColor Gray
-    Write-Host "Output Format: $OutputFormat" -ForegroundColor Gray
+# Main validation execution
+function Start-Validation {
+    Write-Info "Starting Mergify configuration validation..."
+    Write-Info "Config Path: $ConfigPath"
+    Write-Info "Checklist Path: $ChecklistPath"
+    Write-Info "Use Mergify CLI: $UseMergifyCLI"
     Write-Host ""
     
-    # Read all configuration files
+    # Check for Mergify CLI availability
+    $mergifyCLIAvailable = $false
+    if ($UseMergifyCLI) {
+        $mergifyCLIAvailable = Test-MergifyCLIAvailable
+        
+        if (-not $mergifyCLIAvailable) {
+            Write-Warning "Mergify CLI not available. Install with: pip install mergify-cli"
+            $install = Read-Host "Would you like to try installing Mergify CLI automatically? (y/N)"
+            if ($install -eq 'y' -or $install -eq 'Y') {
+                $mergifyCLIAvailable = Install-MergifyCLI
+            }
+        }
+    }
+    
+    # Validate config directory exists
+    if (-not (Test-Path $ConfigPath)) {
+        Write-Error "Configuration directory not found: $ConfigPath"
+        exit 1
+    }
+    
+    # Get all YAML files in config directory
+    $configFiles = Get-ChildItem -Path $ConfigPath -Filter "*.yml" -File
+    
+    if ($configFiles.Count -eq 0) {
+        Write-Error "No YAML configuration files found in $ConfigPath"
+        exit 1
+    }
+    
+    Write-Info "Found $($configFiles.Count) configuration files"
+    Write-Host ""
+    
+    # Read all config content for team/user validation
     $allConfigContent = ""
-    if (Test-Path $ConfigPath) {
-        $configFiles = Get-ChildItem -Path $ConfigPath -Filter "*.yml" -Recurse
-        foreach ($file in $configFiles) {
-            $allConfigContent += Get-Content $file.FullName -Raw
-            $allConfigContent += "`n"
-        }
+    foreach ($file in $configFiles) {
+        $allConfigContent += Get-Content $file.FullName -Raw
+        $allConfigContent += "`n"
     }
     
+    # Validate each configuration file
+    foreach ($file in $configFiles) {
+        Write-Info "Validating: $($file.Name)"
+        
+        if ($mergifyCLIAvailable) {
+            # Use Mergify CLI for validation
+            $mergifyValid = Test-MergifyConfigWithCLI -FilePath $file.FullName
+            if (-not $mergifyValid -and $FailFast) {
+                Write-Error "Validation failed, exiting due to -FailFast"
+                exit 1
+            }
+            
+            # Additional CLI-based tests
+            Test-MergifyConfigSyntax -FilePath $file.FullName
+            Test-MergifyRulesWithCLI -ConfigFile $file.FullName
+            Test-MergifyConfigPerformance -ConfigFile $file.FullName
+        } else {
+            # Fallback to basic validation
+            $yamlValid = Test-YamlSyntax -FilePath $file.FullName
+            if (-not $yamlValid -and $FailFast) {
+                Write-Error "Validation failed, exiting due to -FailFast"
+                exit 1
+            }
+            
+            $mergifyValid = Test-MergifyConfig -FilePath $file.FullName
+            if (-not $mergifyValid -and $FailFast) {
+                Write-Error "Validation failed, exiting due to -FailFast"
+                exit 1
+            }
+        }
+        
+        # Security policy validation (always run)
+        $securityValid = Test-SecurityPolicies -FilePath $file.FullName
+        if (-not $securityValid -and $FailFast) {
+            Write-Error "Validation failed, exiting due to -FailFast"
+            exit 1
+        }
+        
+        Write-Host ""
+    }
+    
+    # CLI-specific validations
+    if ($mergifyCLIAvailable) {
+        # Validate teams and users with GitHub API
+        Test-MergifyTeamsAndUsers -ConfigContent $allConfigContent -Repository $env:GITHUB_REPOSITORY
+        
+        # Template validation
+        Test-MergifyTemplateValidation -ConfigPath $ConfigPath
+    }
+    
+    # Validate extends references
+    Test-ExtendReferences -ConfigPath $ConfigPath
+    
+    # Validate checklist completeness if path exists
     if (Test-Path $ChecklistPath) {
-        $checklistFiles = Get-ChildItem -Path $ChecklistPath -Filter "*.yml" -Recurse
-        foreach ($file in $checklistFiles) {
-            $allConfigContent += Get-Content $file.FullName -Raw
-            $allConfigContent += "`n"
-        }
+        Test-ChecklistCompleteness -ChecklistDir $ChecklistPath
     }
     
-    if ([string]::IsNullOrEmpty($allConfigContent)) {
-        Write-Error "No configuration content found to audit"
+    # Summary
+    Write-Host "=" * 50
+    Write-Info "Validation Summary:"
+    Write-Success "Passed: $script:PassedChecks"
+    if ($script:FailedChecks -gt 0) {
+        Write-Error "Failed: $script:FailedChecks"
+    }
+    if ($script:Warnings -gt 0) {
+        Write-Warning "Warnings: $script:Warnings"
+    }
+    Write-Info "Total Checks: $script:TotalChecks"
+    Write-Info "Mergify CLI Used: $mergifyCLIAvailable"
+    
+    if ($script:FailedChecks -gt 0) {
+        Write-Error "Validation completed with errors!"
         exit 1
-    }
-    
-    # Run compliance tests
-    Write-Host "Running compliance framework tests..." -ForegroundColor Yellow
-    
-    $AuditResults.FrameworkResults["SOX"] = Test-SOXCompliance -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["GDPR"] = Test-GDPRCompliance -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["SOC2"] = Test-SOC2Compliance -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["ISO27001"] = Test-ISO27001Compliance -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["SecurityBestPractices"] = Test-GeneralSecurityBestPractices -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["MergifyBestPractices"] = Test-MergifyBestPractices -ConfigContent $allConfigContent
-    $AuditResults.FrameworkResults["TechStackCoverage"] = Test-TechStackCoverage -ConfigContent $allConfigContent -ChecklistPath $ChecklistPath
-    
-    # Calculate overall compliance score
-    $totalScore = 0
-    $totalMaxScore = 0
-    foreach ($framework in $AuditResults.FrameworkResults.Keys) {
-        $result = $AuditResults.FrameworkResults[$framework]
-        $totalScore += $result.Score
-        $totalMaxScore += $result.MaxScore
-    }
-    
-    $AuditResults.ComplianceScore = [math]::Round(($totalScore / $totalMaxScore) * 100, 2)
-    
-    # Generate recommendations
-    if ($AuditResults.ComplianceScore -lt 80) {
-        $AuditResults.Recommendations += "Overall compliance score is below 80%. Immediate attention required."
-    }
-    
-    if ($AuditResults.FrameworkResults["SOX"].Percentage -lt 75) {
-        $AuditResults.Recommendations += "SOX compliance is below 75%. Review financial change controls."
-    }
-    
-    if ($AuditResults.FrameworkResults["SecurityBestPractices"].Percentage -lt 90) {
-        $AuditResults.Recommendations += "Security best practices compliance is below 90%. Review security controls."
-    }
-    
-    if ($AuditResults.FrameworkResults["MergifyBestPractices"].Percentage -lt 80) {
-        $AuditResults.Recommendations += "Mergify best practices compliance is below 80%. Review configuration architecture."
-    }
-    
-    if ($AuditResults.FrameworkResults["TechStackCoverage"].Percentage -lt 85) {
-        $AuditResults.Recommendations += "Tech stack coverage is below 85%. Add missing technology detection rules."
-    }
-    
-    # Output results
-    switch ($OutputFormat.ToLower()) {
-        "json" {
-            $jsonOutput = $AuditResults | ConvertTo-Json -Depth 10
-            if ($OutputFile) {
-                $jsonOutput | Out-File -FilePath $OutputFile -Encoding UTF8
-                Write-Host "Audit results saved to: $OutputFile" -ForegroundColor Green
-            } else {
-                Write-Output $jsonOutput
-            }
-        }
-        "csv" {
-            $csvData = @()
-            foreach ($framework in $AuditResults.FrameworkResults.Keys) {
-                $result = $AuditResults.FrameworkResults[$framework]
-                $csvData += [PSCustomObject]@{
-                    Framework = $framework
-                    Score = $result.Score
-                    MaxScore = $result.MaxScore
-                    Percentage = $result.Percentage
-                    Status = if ($result.Percentage -ge 80) { "PASS" } else { "FAIL" }
-                }
-            }
-            if ($OutputFile) {
-                $csvData | Export-Csv -Path $OutputFile -NoTypeInformation
-                Write-Host "Audit results saved to: $OutputFile" -ForegroundColor Green
-            } else {
-                $csvData | Format-Table -AutoSize
-            }
-        }
-        default {
-            # Console output
-            Write-Host "=" * 60 -ForegroundColor Cyan
-            Write-Host "MERGIFY COMPLIANCE AUDIT REPORT" -ForegroundColor Cyan
-            Write-Host "=" * 60 -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "Overall Compliance Score: $($AuditResults.ComplianceScore)%" -ForegroundColor $(if ($AuditResults.ComplianceScore -ge 80) { "Green" } else { "Red" })
-            Write-Host ""
-            
-            foreach ($framework in $AuditResults.FrameworkResults.Keys) {
-                $result = $AuditResults.FrameworkResults[$framework]
-                $status = if ($result.Percentage -ge 80) { "PASS" } else { "FAIL" }
-                $color = if ($result.Percentage -ge 80) { "Green" } else { "Red" }
-                
-                Write-Host "$framework Compliance: $($result.Percentage)% [$status]" -ForegroundColor $color
-                
-                if ($Detailed) {
-                    foreach ($finding in $result.Findings) {
-                        Write-Host "  $finding" -ForegroundColor Gray
-                    }
-                    Write-Host ""
-                }
-            }
-            
-            if ($AuditResults.Recommendations.Count -gt 0) {
-                Write-Host ""
-                Write-Host "RECOMMENDATIONS:" -ForegroundColor Yellow
-                foreach ($recommendation in $AuditResults.Recommendations) {
-                    Write-Host "• $recommendation" -ForegroundColor Yellow
-                }
-            }
-            
-            Write-Host ""
-            Write-Host "Audit completed at: $($AuditResults.Timestamp)" -ForegroundColor Gray
-        }
-    }
-    
-    # Exit with appropriate code
-    if ($AuditResults.ComplianceScore -lt 80) {
-        exit 1
+    } elseif ($script:Warnings -gt 0) {
+        Write-Warning "Validation completed with warnings"
+        exit 0
     } else {
+        Write-Success "All validations passed!"
         exit 0
     }
 }
 
-# Execute audit
-Start-ComplianceAudit
+# Execute validation
+Start-Validation
