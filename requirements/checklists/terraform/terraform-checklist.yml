@@ -1,0 +1,245 @@
+pull_request_rules:
+  # Terraform service checklist - main configuration
+  - name: Terraform Service Review Checklist
+    conditions:
+      - files~=\.tf$
+      - files~=\.tfvars$
+      - files~=\.tfvars\.json$
+      - -draft
+    actions:
+      comment:
+        message: |
+          ## 🏗️ Terraform Service Review Checklist
+          
+          ### 🔍 Code Quality & Linting
+          - [ ] `terraform fmt` applied to all files
+          - [ ] `terraform validate` passes successfully
+          - [ ] `tflint` executed without errors
+          - [ ] `checkov` or `tfsec` security scan completed
+          - [ ] Variable names follow naming conventions
+          - [ ] Resource names follow company standards
+          - [ ] Code is properly commented and documented
+          
+          ### 🔒 Security & Compliance
+          - [ ] No hardcoded secrets, passwords, or API keys
+          - [ ] Sensitive variables use appropriate data types
+          - [ ] IAM policies follow principle of least privilege
+          - [ ] Network security groups are appropriately restrictive
+          - [ ] Encryption enabled for data at rest and in transit
+          - [ ] Required tags applied for compliance and cost tracking
+          - [ ] Security scanning tools (Checkov/tfsec) pass
+          
+          ### 📦 Module Integration
+          - [ ] Module versions pinned to specific releases (no `latest`)
+          - [ ] Module source URLs are correct and accessible
+          - [ ] Required module inputs properly provided
+          - [ ] Optional module inputs reviewed and configured
+          - [ ] Module outputs used appropriately
+          - [ ] Module compatibility verified with Terraform version
+          - [ ] Breaking changes in module updates documented
+          
+          ### 🧪 Testing & Validation
+          - [ ] `terraform plan` reviewed and approved by reviewer
+          - [ ] Plan output shows only expected changes
+          - [ ] No unintended resource deletions or recreations
+          - [ ] Changes tested in development environment
+          - [ ] Integration tests pass (if applicable)
+          - [ ] Terraform state consistency verified
+          
+          ### 🌍 Environment & Configuration
+          - [ ] Correct workspace/environment targeted
+          - [ ] Backend configuration verified
+          - [ ] Provider versions pinned appropriately
+          - [ ] Environment-specific variables validated
+          - [ ] Resource sizing appropriate for environment
+          - [ ] Dependencies and prerequisites met
+          
+          ### 💰 Cost & Performance
+          - [ ] Resource costs estimated and approved
+          - [ ] Auto-scaling configurations reviewed
+          - [ ] Resource limits and quotas considered
+          - [ ] Performance implications assessed
+          - [ ] Cost optimization opportunities identified
+          
+          ### 📚 Documentation & Communication
+          - [ ] README updated with new resources/variables
+          - [ ] Variable descriptions are clear and complete
+          - [ ] Architecture documentation updated (if needed)
+          - [ ] Deployment procedures documented
+          - [ ] Stakeholders notified of changes (if required)
+          
+          ### 🚀 Deployment Readiness
+          - [ ] Rollback plan documented
+          - [ ] Deployment order/dependencies identified
+          - [ ] CI/CD pipeline configuration updated
+          - [ ] Monitoring and alerting configured
+          - [ ] Health checks and readiness probes defined
+          
+          ---
+          **Reviewer Guidelines:**
+          - Verify all checklist items before approval
+          - Pay special attention to security and module version pinning
+          - Ensure `terraform plan` output is attached or accessible
+          
+          /cc @devops-team @terraform-reviewers
+
+  # Critical infrastructure changes - enhanced checklist
+  - name: Critical Infrastructure Changes
+    conditions:
+      - files~=\.tf$
+      - or:
+          - label=production
+          - label=critical
+          - files~=(network|security|iam|database)
+    actions:
+      comment:
+        message: |
+          ## 🚨 CRITICAL INFRASTRUCTURE CHANGE DETECTED
+          
+          **⚠️ ENHANCED REVIEW REQUIRED ⚠️**
+          
+          ### 🛡️ Critical Security Review
+          - [ ] Security team review completed: @security-team
+          - [ ] Compliance requirements verified
+          - [ ] Network security impact assessed
+          - [ ] IAM permission changes validated
+          - [ ] Data protection measures confirmed
+          - [ ] Audit logging implications reviewed
+          
+          ### 🏥 High Availability & Disaster Recovery
+          - [ ] HA/DR impact assessment completed
+          - [ ] Backup and recovery procedures updated
+          - [ ] Failover scenarios tested
+          - [ ] RTO/RPO requirements still met
+          - [ ] Cross-region implications considered
+          
+          ### 📊 Production Impact Assessment
+          - [ ] Production deployment window scheduled
+          - [ ] Change advisory board approval (if required)
+          - [ ] Stakeholder notification completed
+          - [ ] Rollback procedures tested and documented
+          - [ ] Performance baseline established
+          - [ ] Monitoring dashboards updated
+          
+          **STOP:** This change requires senior engineer approval before merge.
+          
+          /cc @senior-engineers @security-team @platform-team
+
+  # Module version updates
+  - name: Module Version Update Checklist
+    conditions:
+      - files~=\.tf$
+      - body~=(?i)(module.*version|source.*=.*\?ref=)
+    actions:
+      comment:
+        message: |
+          ## 📦 Module Version Update Detected
+          
+          ### 🔄 Module Update Validation
+          - [ ] Module changelog reviewed for breaking changes
+          - [ ] Terraform version compatibility verified
+          - [ ] Provider version compatibility checked
+          - [ ] Input variable changes documented
+          - [ ] Output variable changes documented
+          - [ ] Migration guide followed (if applicable)
+          
+          ### 🧪 Update Testing
+          - [ ] Module updates tested in isolated environment
+          - [ ] Integration tests updated for new module version
+          - [ ] Backwards compatibility verified
+          - [ ] Performance impact assessed
+          - [ ] Security implications reviewed
+          
+          **Module Update Summary:**
+          Please document which modules are being updated and from/to which versions.
+          
+          | Module | From Version | To Version | Breaking Changes |
+          |--------|--------------|------------|------------------|
+          | _module-name_ | _old-version_ | _new-version_ | Yes/No |
+          
+          /cc @module-maintainers
+
+  # Security-sensitive file changes
+  - name: Security File Changes
+    conditions:
+      - files~=(security|iam|rbac|auth|vault|secret)
+    actions:
+      comment:
+        message: |
+          ## 🔐 Security-Sensitive Changes Detected
+          
+          ### 🛡️ Security Validation Required
+          - [ ] Security team approval: @security-team
+          - [ ] Principle of least privilege verified
+          - [ ] Access patterns documented
+          - [ ] Compliance requirements met
+          - [ ] Security scanning completed
+          - [ ] Penetration testing impact assessed
+          
+          **Security Review Required Before Merge**
+
+  # Large terraform changes
+  - name: Large Terraform Changes
+    conditions:
+      - files~=\.tf$
+      - "#changed_lines>=100"
+    actions:
+      comment:
+        message: |
+          ## 📊 Large Terraform Change Detected
+          
+          ### 🔍 Large Change Review
+          - [ ] Changes logically grouped and explained
+          - [ ] Consider splitting into smaller PRs
+          - [ ] All modified resources documented
+          - [ ] Blast radius assessed and minimized
+          - [ ] Testing strategy adequate for change size
+          - [ ] Senior engineer review completed
+          
+          **Large Change Summary:**
+          Please provide a summary of the major changes and their business justification.
+
+  # Merge requirements for terraform changes
+  - name: Terraform Merge Requirements
+    conditions:
+      - files~=\.tf$
+      - "#approved-reviews-by>=1"
+      - status-success=terraform-validate
+      - status-success=terraform-plan
+      - status-success=tflint
+      - status-success=security-scan
+      - -draft
+      - -label=wip
+    actions:
+      merge:
+        method: squash
+        commit_message_template: |
+          {{ title }} (#{{ number }})
+          
+          {{ body }}
+          
+          Terraform changes reviewed and validated:
+          - Linting: ✅
+          - Security: ✅
+          - Plan: ✅
+          - Review: ✅
+
+  # Block merge if critical items not completed
+  - name: Block merge on incomplete critical items
+    conditions:
+      - files~=\.tf$
+      - or:
+          - label=production
+          - label=critical
+      - -body~=(?m)- \[x\].*terraform plan.*reviewed and approved
+      - -body~=(?m)- \[x\].*security.*scan.*completed
+    actions:
+      comment:
+        message: |
+          ❌ **MERGE BLOCKED**
+          
+          Critical checklist items must be completed before merging:
+          - [ ] Terraform plan reviewed and approved
+          - [ ] Security scan completed
+          
+          Please complete these items and update the checklist.
