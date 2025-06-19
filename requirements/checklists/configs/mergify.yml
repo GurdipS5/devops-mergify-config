@@ -1,0 +1,370 @@
+# .mergify.yml - Complete Mergify Configuration
+# Place this file in the root of your repository
+
+pull_request_rules:
+  # ====================================================================
+  # AUTO-MERGE RULES
+  # ====================================================================
+  
+  # Auto-merge dependabot PRs for patch updates
+  - name: "Auto-merge Dependabot patch updates"
+    conditions:
+      - author=dependabot[bot]
+      - check-success=ci
+      - check-success=build
+      - "#approved-reviews-by>=1"
+      - title~=^Bump .* from .* to .*\.(.*\.)?[0-9]+$
+      - -draft
+      - label!=no-auto-merge
+    actions:
+      merge:
+        method: squash
+        commit_message_template: |
+          {{ title }} (#{{ number }})
+          
+          {{ body }}
+
+  # Auto-merge minor dependency updates with 2 approvals
+  - name: "Auto-merge Dependabot minor updates"
+    conditions:
+      - author=dependabot[bot]
+      - check-success=ci
+      - check-success=build
+      - "#approved-reviews-by>=2"
+      - title~=^Bump .* from .* to .*\.[0-9]+\..*$
+      - -draft
+      - label!=no-auto-merge
+    actions:
+      merge:
+        method: squash
+
+  # Auto-merge hotfix branches
+  - name: "Auto-merge hotfix branches"
+    conditions:
+      - base=main
+      - head~=^hotfix/
+      - check-success=ci
+      - check-success=build
+      - "#approved-reviews-by>=2"
+      - -draft
+      - label=hotfix
+    actions:
+      merge:
+        method: merge
+
+  # Auto-merge documentation updates
+  - name: "Auto-merge documentation updates"
+    conditions:
+      - files~=^docs/
+      - files~=\.md$
+      - check-success=ci
+      - "#approved-reviews-by>=1"
+      - -draft
+      - label=documentation
+    actions:
+      merge:
+        method: squash
+
+  # ====================================================================
+  # QUEUE MANAGEMENT
+  # ====================================================================
+
+  # Add to merge queue for feature branches
+  - name: "Add to merge queue"
+    conditions:
+      - base=main
+      - check-success=ci
+      - check-success=build
+      - "#approved-reviews-by>=2"
+      - -draft
+      - label!=no-merge-queue
+      - label!=hotfix
+    actions:
+      queue:
+        name: default
+        method: squash
+
+  # Priority queue for urgent fixes
+  - name: "Priority merge queue"
+    conditions:
+      - base=main
+      - check-success=ci
+      - check-success=build
+      - "#approved-reviews-by>=1"
+      - -draft
+      - label=urgent
+    actions:
+      queue:
+        name: urgent
+        method: merge
+        priority: high
+
+  # ====================================================================
+  # AUTO-LABELING RULES
+  # ====================================================================
+
+  # Label based on file changes
+  - name: "Label frontend changes"
+    conditions:
+      - files~=^(src/frontend/|frontend/|web/|ui/)
+    actions:
+      label:
+        add:
+          - frontend
+
+  - name: "Label backend changes"
+    conditions:
+      - files~=^(src/backend/|backend/|api/|server/)
+    actions:
+      label:
+        add:
+          - backend
+
+  - name: "Label infrastructure changes"
+    conditions:
+      - files~=^(terraform/|infrastructure/|\.tf$|\.yaml$|\.yml$|Dockerfile|docker-compose)
+    actions:
+      label:
+        add:
+          - infrastructure
+
+  - name: "Label database changes"
+    conditions:
+      - files~=^(migrations/|database/|\.sql$)
+    actions:
+      label:
+        add:
+          - database
+
+  - name: "Label CI/CD changes"
+    conditions:
+      - files~=^(\.github/|\.gitlab-ci|\.circleci/|azure-pipelines|Jenkinsfile)
+    actions:
+      label:
+        add:
+          - ci-cd
+
+  - name: "Label documentation changes"
+    conditions:
+      - files~=^(docs/|README|\.md$)
+    actions:
+      label:
+        add:
+          - documentation
+
+  - name: "Label dependency updates"
+    conditions:
+      - files~=^(package\.json|package-lock\.json|requirements\.txt|Gemfile|pom\.xml|go\.mod|Cargo\.toml)$
+    actions:
+      label:
+        add:
+          - dependencies
+
+  # ====================================================================
+  # SIZE-BASED LABELING
+  # ====================================================================
+
+  - name: "Label small PRs"
+    conditions:
+      - "#files<=5"
+      - "#lines<=100"
+    actions:
+      label:
+        add:
+          - size/small
+
+  - name: "Label medium PRs"
+    conditions:
+      - "#files<=15"
+      - "#lines<=500"
+      - "#files>5"
+    actions:
+      label:
+        add:
+          - size/medium
+
+  - name: "Label large PRs"
+    conditions:
+      - "#files>15"
+      - "#lines>500"
+    actions:
+      label:
+        add:
+          - size/large
+
+  # ====================================================================
+  # BRANCH PROTECTION RULES
+  # ====================================================================
+
+  # Require reviews for large changes
+  - name: "Request additional reviews for large PRs"
+    conditions:
+      - "#files>20"
+      - "#approved-reviews-by<3"
+    actions:
+      request_reviews:
+        teams:
+          - senior-developers
+        users:
+          - tech-lead
+
+  # Block merge if conflicts exist
+  - name: "Block merge on conflicts"
+    conditions:
+      - conflict
+    actions:
+      comment:
+        message: |
+          This PR has merge conflicts that need to be resolved before it can be merged.
+          Please rebase or merge the latest changes from the target branch.
+
+  # ====================================================================
+  # NOTIFICATION RULES
+  # ====================================================================
+
+  # Notify on security-related changes
+  - name: "Notify security team"
+    conditions:
+      - files~=^(security/|\.security|auth|jwt|crypto)
+    actions:
+      request_reviews:
+        teams:
+          - security-team
+      comment:
+        message: |
+          🔐 This PR contains security-related changes and has been flagged for security team review.
+
+  # Notify on breaking changes
+  - name: "Notify on breaking changes"
+    conditions:
+      - title~=(?i)breaking
+      - body~=(?i)breaking.change
+    actions:
+      label:
+        add:
+          - breaking-change
+      comment:
+        message: |
+          ⚠️ **BREAKING CHANGE DETECTED**
+          
+          This PR contains breaking changes. Please ensure:
+          - [ ] Migration guide is updated
+          - [ ] Version bump is appropriate
+          - [ ] Stakeholders are notified
+
+  # ====================================================================
+  # DRAFT PR RULES
+  # ====================================================================
+
+  - name: "Label draft PRs"
+    conditions:
+      - draft
+    actions:
+      label:
+        add:
+          - work-in-progress
+
+  - name: "Remove WIP label when PR is ready"
+    conditions:
+      - -draft
+      - label=work-in-progress
+    actions:
+      label:
+        remove:
+          - work-in-progress
+
+  # ====================================================================
+  # CLEANUP RULES
+  # ====================================================================
+
+  # Delete head branch after merge
+  - name: "Delete head branch after merge"
+    conditions:
+      - merged
+      - head~=^(?!main|master|develop|staging|production)
+    actions:
+      delete_head_branch: {}
+
+  # Remove outdated reviews when new commits are pushed
+  - name: "Dismiss stale reviews"
+    conditions:
+      - "#commits-behind>0"
+    actions:
+      dismiss_reviews:
+        approved: true
+        changes_requested: false
+
+  # ====================================================================
+  # STALE PR MANAGEMENT
+  # ====================================================================
+
+  - name: "Label stale PRs"
+    conditions:
+      - updated-at<7 days ago
+      - -merged
+      - -closed
+    actions:
+      label:
+        add:
+          - stale
+
+  - name: "Comment on very stale PRs"
+    conditions:
+      - updated-at<14 days ago
+      - -merged
+      - -closed
+    actions:
+      comment:
+        message: |
+          This PR has been inactive for 2 weeks. Please update it or it may be closed automatically.
+
+  # ====================================================================
+  # EMERGENCY RULES
+  # ====================================================================
+
+  # Fast-track emergency fixes
+  - name: "Emergency merge bypass"
+    conditions:
+      - label=emergency
+      - check-success=ci
+      - "#approved-reviews-by>=1"
+    actions:
+      merge:
+        method: merge
+      comment:
+        message: |
+          🚨 **EMERGENCY MERGE** - This PR was merged under emergency procedures.
+
+  # ====================================================================
+  # BACKPORT RULES
+  # ====================================================================
+
+  - name: "Auto-backport to release branches"
+    conditions:
+      - merged
+      - label=backport-needed
+      - base=main
+    actions:
+      backport:
+        branches:
+          - release/v1.x
+          - release/v2.x
+
+# ====================================================================
+# QUEUE CONFIGURATION
+# ====================================================================
+
+queue_rules:
+  - name: default
+    conditions:
+      - check-success=ci
+      - check-success=build
+    merge_conditions:
+      - base=main
+
+  - name: urgent
+    conditions:
+      - check-success=ci
+    merge_conditions:
+      - base=main
+    batch_size: 1
