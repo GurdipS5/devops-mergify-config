@@ -1,0 +1,311 @@
+# CodeRabbit Configuration
+# AI-powered code review integrated with Mergify + TeamCity + Renovate/Bolt
+
+# Language and framework detection
+language: auto
+
+# Review settings
+reviews:
+  # Review every pull request
+  request_changes_workflow: true
+  
+  # Auto-dismiss resolved conversations
+  auto_dismiss_resolved: true
+  
+  # Review levels
+  profile: chill  # Options: assertive, chill (default), strict
+  
+  # Comment on specific issues
+  path_filters:
+    - "!node_modules/**"
+    - "!dist/**"
+    - "!build/**"
+    - "!coverage/**"
+    - "!*.min.js"
+    - "!*.min.css"
+    - "!package-lock.json"
+    - "!yarn.lock"
+    - "!pnpm-lock.yaml"
+  
+  # Focus areas
+  focus:
+    - security
+    - performance
+    - best_practices
+    - code_smells
+    - documentation
+    - tests
+
+# Ignore patterns
+path_instructions:
+  # Configuration files - light review
+  - path: "**/*.{json,yaml,yml,toml}"
+    instructions: |
+      - Focus on syntax errors and validation
+      - Check for sensitive data exposure
+      - Verify proper structure
+  
+  # Documentation - focus on clarity
+  - path: "**/*.md"
+    instructions: |
+      - Check for broken links
+      - Verify code examples are accurate
+      - Ensure clarity and readability
+      - Flag outdated information
+  
+  # Test files - focus on coverage
+  - path: "**/*.test.{js,ts,jsx,tsx}"
+    instructions: |
+      - Ensure adequate test coverage
+      - Check for edge cases
+      - Verify test descriptions are clear
+      - Look for flaky test patterns
+  
+  # Backend code - thorough review
+  - path: "backend/**"
+    instructions: |
+      - Security vulnerabilities (SQL injection, XSS, etc.)
+      - Authentication and authorization issues
+      - Input validation
+      - Error handling
+      - Performance bottlenecks
+      - Database query optimization
+  
+  # Frontend code - UI/UX focus
+  - path: "frontend/**"
+    instructions: |
+      - Accessibility issues (WCAG compliance)
+      - Performance (bundle size, lazy loading)
+      - User experience patterns
+      - React best practices
+      - State management issues
+      - Memory leaks
+
+# Auto-review settings
+auto_review:
+  # Auto-review enabled
+  enabled: true
+  
+  # Auto-review for these authors (exclude bots)
+  exclude_authors:
+    - "renovate[bot]"
+    - "dependabot[bot]"
+    - "bolt[bot]"
+  
+  # Auto-review based on PR labels
+  labels:
+    - "ready-for-review"
+    - "!work-in-progress"
+    - "!do-not-merge"
+  
+  # Draft PRs - no auto-review
+  drafts: false
+
+# Security scanning
+security:
+  # Secrets detection handled by GitGuardian
+  secrets_detection: false
+  
+  # Scan for vulnerabilities
+  vulnerability_detection: true
+  
+  # SAST (Static Application Security Testing)
+  sast_enabled: true
+
+# Integration with Mergify
+mergify_integration:
+  # Don't block merge if CodeRabbit hasn't reviewed yet
+  blocking: false
+  
+  # Comment on PRs that Mergify will auto-merge
+  notify_on_auto_merge: true
+
+# Code quality checks
+quality:
+  # Complexity thresholds
+  max_complexity: 15
+  max_function_length: 50
+  max_file_length: 500
+  
+  # Code duplication
+  duplication_threshold: 10
+  
+  # Comment quality
+  require_comments: true
+  min_comment_density: 10  # percentage
+
+# Performance checks
+performance:
+  # Bundle size analysis
+  bundle_size_check: true
+  bundle_size_limit: 500kb  # Warning threshold
+  
+  # Database query analysis
+  query_analysis: true
+  n_plus_one_detection: true
+
+# Best practices enforcement
+best_practices:
+  # Naming conventions
+  naming_conventions: true
+  
+  # Code style
+  style_consistency: true
+  
+  # Error handling
+  error_handling_check: true
+  
+  # Async/await patterns
+  async_patterns: true
+
+# AI model settings
+ai:
+  # Model to use
+  model: gpt-4  # Options: gpt-3.5-turbo, gpt-4
+  
+  # Temperature (creativity vs consistency)
+  temperature: 0.2  # Lower = more consistent
+  
+  # Max tokens for responses
+  max_tokens: 2000
+
+# Chat settings
+chat:
+  # Enable inline chat on PR
+  enabled: true
+  
+  # Allow @coderabbitai mentions
+  mentions: true
+
+# Learning settings
+learning:
+  # Learn from your feedback
+  feedback_learning: true
+  
+  # Adapt to team coding style
+  style_learning: true
+
+# Notification settings
+notifications:
+  # Notify on completion
+  completion: true
+  
+  # Notify on issues found
+  issues_found: true
+  
+  # Summary report
+  summary: true
+
+# Custom rules
+custom_rules:
+  # No console.log in production code
+  - name: "No console.log"
+    pattern: "console\\.log\\("
+    paths:
+      - "src/**/*.{js,ts,jsx,tsx}"
+    exclude_paths:
+      - "**/*.test.*"
+      - "**/*.spec.*"
+    message: "Remove console.log before merging. Use a proper logging library."
+    severity: warning
+  
+  # No TODO comments without ticket reference
+  - name: "TODO with ticket"
+    pattern: "TODO(?!.*#\\d+|.*JIRA-\\d+)"
+    paths: "**/*"
+    message: "TODO comments should reference a ticket (e.g., TODO: #123 or TODO: JIRA-456)"
+    severity: info
+  
+  # Require error handling for async functions
+  - name: "Async error handling"
+    pattern: "async\\s+function.*\\{[^}]*(?!try)[^}]*await"
+    paths: "**/*.{js,ts}"
+    message: "Async functions should include try-catch for error handling"
+    severity: warning
+  
+  # Enforce TypeScript for new files
+  - name: "Use TypeScript"
+    pattern: "\\.jsx?$"
+    paths:
+      - "src/**"
+    exclude_paths:
+      - "**/*.config.*"
+      - "**/*.test.*"
+    message: "New files should use TypeScript (.ts/.tsx) instead of JavaScript"
+    severity: info
+
+# Integration with other tools
+integrations:
+  # GitGuardian for secrets detection
+  gitguardian:
+    enabled: true
+    defer_to_gitguardian: true
+  
+  # TeamCity integration
+  teamcity:
+    enabled: true
+    wait_for_checks: true
+    required_checks:
+      - "TeamCity"
+  
+  # Mergify integration
+  mergify:
+    enabled: true
+    respect_labels: true
+    respect_draft_status: true
+  
+  # Renovate/Bolt integration
+  dependency_bots:
+    - name: "renovate[bot]"
+      skip_review: false  # Still review dependency updates
+      focus: ["security", "breaking_changes"]
+    
+    - name: "bolt[bot]"
+      skip_review: false
+      focus: ["security", "breaking_changes"]
+
+# Review summary settings
+summary:
+  # Include in PR comments
+  include_in_pr: true
+  
+  # Sections to include
+  sections:
+    - overview
+    - security_issues
+    - performance_issues
+    - code_quality
+    - suggestions
+    - tests_coverage
+  
+  # Format
+  format: markdown
+  
+  # Collapse long summaries
+  collapse_threshold: 20
+
+# Continuous learning
+feedback:
+  # Learn from user reactions
+  learn_from_reactions: true
+  
+  # Improve based on accepted/rejected suggestions
+  learn_from_suggestions: true
+
+# Advanced settings
+advanced:
+  # Incremental review (only changed lines)
+  incremental: true
+  
+  # Review commits individually
+  commit_by_commit: false
+  
+  # Parallel processing
+  parallel: true
+  
+  # Cache results for faster reviews
+  cache_enabled: true
+  
+  # Rate limiting
+  rate_limit:
+    max_reviews_per_hour: 50
