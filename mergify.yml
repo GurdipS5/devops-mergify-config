@@ -1,0 +1,275 @@
+# Mergify Configuration with TeamCity Integration
+# 
+# IMPORTANT: Update the check-success names to match your TeamCity build configurations
+# 
+# TeamCity reports status in one of these formats:
+#   - "TeamCity" (general status - recommended for simplicity)
+#   - "TeamCity: Build Configuration Name" (specific build)
+#   - Custom check names if configured in TeamCity
+#
+# To find your exact check names:
+#   1. Create a test PR
+#   2. Look at the checks section in the PR
+#   3. Copy the exact name(s) and update below
+#
+# Current configuration uses: check-success=TeamCity
+# This will match any TeamCity build status.
+#
+# For multiple specific builds, use:
+#   - check-success=TeamCity: Tests
+#   - check-success=TeamCity: Lint
+#   - check-success=TeamCity: Build
+
+queue_rules:
+  - name: default
+    conditions:
+      - check-success=TeamCity
+    speculative_checks: 2
+    batch_size: 3
+    batch_max_wait_time: 5min
+
+pull_request_rules:
+  # Auto-merge for Renovate PRs if tests pass
+  - name: Automatic merge for Renovate pull requests
+    conditions:
+      - author=renovate[bot]
+      - check-success=TeamCity
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+    actions:
+      queue:
+        name: default
+        method: squash
+      comment:
+        message: "✅ Auto-merging Renovate dependency update"
+
+  # Auto-merge for Bolt PRs if tests pass
+  - name: Automatic merge for Bolt pull requests
+    conditions:
+      - author=bolt[bot]
+      - check-success=TeamCity
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+    actions:
+      queue:
+        name: default
+        method: squash
+      comment:
+        message: "✅ Auto-merging Bolt dependency update"
+
+  # Auto-merge for Renovate patch updates without approval
+  - name: Auto-merge Renovate patch updates
+    conditions:
+      - author=renovate[bot]
+      - title~=^(fix\(deps\)|chore\(deps\)).*\[SECURITY\]|^Update dependency.*to v.*\.\d+\.\d+$
+      - check-success=TeamCity
+      - "#changes-requested-reviews-by=0"
+      - -label~=major-update
+    actions:
+      queue:
+        name: default
+        method: squash
+      comment:
+        message: "✅ Auto-merging patch dependency update (no approval needed)"
+      review:
+        type: APPROVE
+        message: "Auto-approved: patch-level dependency update"
+
+  # Label Renovate PRs by update type
+  - name: Label Renovate major updates
+    conditions:
+      - author=renovate[bot]
+      - title~=^Update.*to v\d+\.
+    actions:
+      label:
+        add:
+          - dependencies
+          - major-update
+
+  - name: Label Renovate minor updates
+    conditions:
+      - author=renovate[bot]
+      - title~=^Update.*to v\d+\.\d+\.
+      - -title~=^Update.*to v\d+\.0\.
+    actions:
+      label:
+        add:
+          - dependencies
+          - minor-update
+
+  - name: Label Renovate patch updates
+    conditions:
+      - author=renovate[bot]
+      - -title~=^Update.*to v\d+\.0\.
+      - -title~=^Update.*to v\d+\.\d+\.0$
+    actions:
+      label:
+        add:
+          - dependencies
+          - patch-update
+
+  # Require reviews for production code
+  - name: Require 2 approvals for main branch
+    conditions:
+      - base=main
+      - "#approved-reviews-by>=2"
+      - "#changes-requested-reviews-by=0"
+      - check-success=TeamCity
+      - label!=work-in-progress
+      - label!=do-not-merge
+      - -draft
+    actions:
+      queue:
+        name: default
+        method: merge
+
+  # Auto-merge for hotfixes with 1 approval
+  - name: Fast-track hotfix PRs
+    conditions:
+      - base=main
+      - label=hotfix
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+      - check-success=TeamCity
+    actions:
+      queue:
+        name: default
+        method: merge
+      comment:
+        message: "🚨 Hotfix fast-tracked with 1 approval"
+
+  # Require team review for specific directories
+  - name: Request backend team review for backend changes
+    conditions:
+      - files~=^backend/
+    actions:
+      request_reviews:
+        teams:
+          - backend-team
+
+  - name: Request frontend team review for frontend changes
+    conditions:
+      - files~=^frontend/
+    actions:
+      request_reviews:
+        teams:
+          - frontend-team
+
+  # Auto-label based on file changes
+  - name: Add backend label
+    conditions:
+      - files~=^backend/
+    actions:
+      label:
+        add:
+          - backend
+
+  - name: Add frontend label
+    conditions:
+      - files~=^frontend/
+    actions:
+      label:
+        add:
+          - frontend
+
+  - name: Add docs label
+    conditions:
+      - files~=^docs/
+    actions:
+      label:
+        add:
+          - documentation
+
+  # Block merge if WIP or do-not-merge label
+  - name: Block merge for WIP PRs
+    conditions:
+      - label=work-in-progress
+    actions:
+      comment:
+        message: "⚠️ This PR is marked as Work in Progress. Remove the label when ready for review."
+
+  - name: Block merge for do-not-merge PRs
+    conditions:
+      - label=do-not-merge
+    actions:
+      comment:
+        message: "🚫 This PR is marked as Do Not Merge."
+
+  # Auto-dismiss stale reviews on new commits
+  - name: Dismiss stale reviews
+    conditions:
+      - base=main
+    actions:
+      dismiss_reviews:
+        approved: true
+        changes_requested: false
+        message: "Review dismissed due to new commits"
+
+  # Auto-delete head branch after merge
+  - name: Delete head branch after merge
+    conditions:
+      - merged
+    actions:
+      delete_head_branch: {}
+
+  # Remind reviewers after 2 days of no review
+  - name: Ping reviewers after 2 days
+    conditions:
+      - "#approved-reviews-by=0"
+      - created-at<2 days ago
+      - -draft
+      - label!=work-in-progress
+    actions:
+      comment:
+        message: "👋 Friendly reminder: This PR has been waiting for review for 2 days. cc @reviewers"
+
+  # Require linear history (no merge commits)
+  - name: Require rebase for non-linear history
+    conditions:
+      - base=main
+      - -linear-history
+    actions:
+      comment:
+        message: |
+          ⚠️ This PR has a non-linear history. Please rebase on main:
+          ```bash
+          git fetch origin main
+          git rebase origin/main
+          git push --force-with-lease
+          ```
+
+  # Block large PRs
+  - name: Warn on large PRs
+    conditions:
+      - files>=20
+    actions:
+      comment:
+        message: "⚠️ This PR is quite large (20+ files changed). Consider breaking it into smaller PRs for easier review."
+      label:
+        add:
+          - large-pr
+
+  # Require specific checks for security-sensitive files
+  - name: Require security review for auth changes
+    conditions:
+      - files~=^(backend/auth/|frontend/auth/)
+    actions:
+      request_reviews:
+        teams:
+          - security-team
+      label:
+        add:
+          - security-review
+
+  # Auto-approve minor documentation changes
+  - name: Auto-approve minor doc changes
+    conditions:
+      - author!=renovate[bot]
+      - author!=bolt[bot]
+      - files~=^docs/
+      - -files~=^(?!docs/)
+      - "#files<=5"
+    actions:
+      review:
+        type: APPROVE
+        message: "Auto-approved: documentation-only change"
