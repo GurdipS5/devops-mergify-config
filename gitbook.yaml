@@ -1,0 +1,13 @@
+root: ./
+
+structure:
+  readme: README.md
+  summary: SUMMARY.md
+
+redirects:
+  previous: START-HERE
+
+pdf:
+  pageNumbers: true
+  fontSize: 12
+  paperSize: a4
